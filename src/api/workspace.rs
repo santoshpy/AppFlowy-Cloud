@@ -364,6 +364,11 @@ pub fn workspace_scope() -> Scope {
     .service(
       web::resource("/{workspace_id}/folder").route(web::get().to(get_workspace_folder_handler)),
     )
+    // Backward-compat alias for AppFlowy Web's older folder/page fetch path.
+    .service(
+      web::resource("/{workspace_id}/view/{view_id}")
+        .route(web::get().to(get_workspace_view_compat_handler)),
+    )
     .service(web::resource("/{workspace_id}/recent").route(web::get().to(get_recent_views_handler)))
     .service(
       web::resource("/{workspace_id}/favorite").route(web::get().to(get_favorite_views_handler)),
@@ -2484,6 +2489,32 @@ async fn get_workspace_folder_handler(
     &root_view_id,
   )
   .await?;
+  Ok(Json(AppResponse::Ok().with_data(folder_view)))
+}
+
+// Backward-compat shim for AppFlowy Web. Upstream cloud `main` renamed the
+// folder/page fetch from `/{workspace_id}/view/{view_id}?depth=N` to
+// `/{workspace_id}/folder?root_view_id=...&depth=N`, but AppFlowy Web `main`
+// still calls the old path. This delegates to the exact same folder-structure
+// logic (identical FolderView response) so the web works unchanged.
+async fn get_workspace_view_compat_handler(
+  user_uuid: UserUuid,
+  path: web::Path<(Uuid, Uuid)>,
+  state: Data<AppState>,
+  query: web::Query<QueryWorkspaceFolder>,
+  req: HttpRequest,
+) -> Result<Json<AppResponse<FolderView>>> {
+  let depth = query.depth.unwrap_or(1);
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let user = realtime_user_for_web_request(req.headers(), uid)?;
+  let (workspace_id, view_id) = path.into_inner();
+  state
+    .workspace_access_control
+    .enforce_role_weak(&uid, &workspace_id, AFRole::Member)
+    .await?;
+  let folder_view =
+    biz::collab::ops::get_user_workspace_structure(&state, user, workspace_id, depth, &view_id)
+      .await?;
   Ok(Json(AppResponse::Ok().with_data(folder_view)))
 }
 

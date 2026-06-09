@@ -9,6 +9,12 @@ pub fn server_info_scope() -> Scope {
   web::scope("/api/server").service(web::resource("").route(web::get().to(server_info_handler)))
 }
 
+// Backward-compat alias. Upstream cloud `main` serves server info at `/api/server`,
+// but AppFlowy Web `main` still requests `/api/server-info`. Serve both.
+pub fn server_info_compat_scope() -> Scope {
+  web::scope("/api/server-info").service(web::resource("").route(web::get().to(server_info_handler)))
+}
+
 async fn server_info_handler(
   state: Data<AppState>,
 ) -> actix_web::Result<JsonAppResponse<ServerInfoResponseItem>> {
