@@ -46,3 +46,49 @@ pub struct ObjectGrant {
 pub struct ObjectGrants {
   pub grants: Vec<ObjectGrant>,
 }
+
+// ===== Groups (Phase 2) =====
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CreateGroupParams {
+  pub name: String,
+  pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Group {
+  pub id: Uuid,
+  pub name: String,
+  pub description: Option<String>,
+  pub member_count: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Groups {
+  pub groups: Vec<Group>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GroupMember {
+  pub uid: i64,
+  pub email: String,
+  pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct GroupMembers {
+  pub members: Vec<GroupMember>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AddGroupMemberParams {
+  pub email: String,
+}
+
+/// Grant a group an access level on an object (members inherit it).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GrantGroupAccessParams {
+  pub object_type: GrantObjectType,
+  pub object_id: Uuid,
+  pub access_level: AFAccessLevel,
+}

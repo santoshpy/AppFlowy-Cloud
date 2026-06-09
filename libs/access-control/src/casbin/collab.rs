@@ -315,4 +315,59 @@ mod tests {
       .await
       .is_err());
   }
+
+  /// A user gains access to a collab through GROUP membership: the group is
+  /// granted an access level on the object, and the user inherits it via the
+  /// `g2` grouping. Exercises group grants, membership add/remove, and cache
+  /// invalidation on membership change.
+  #[tokio::test]
+  pub async fn test_group_based_object_grant() {
+    use database_entity::dto::AFAccessLevel;
+
+    let enforcer = test_enforcer_v2().await;
+    let uid = 7; // not a workspace member
+    let workspace_id = Uuid::new_v4();
+    let oid = Uuid::new_v4();
+    let group = SubjectType::Group("g:engineering".to_string());
+    let access_control = AccessControl::with_enforcer(enforcer);
+
+    // Grant the GROUP ReadAndWrite on the collab.
+    access_control
+      .update_policy(
+        group.clone(),
+        ObjectType::Collab(oid.to_string()),
+        AFAccessLevel::ReadAndWrite,
+      )
+      .await
+      .unwrap();
+
+    let collab_access_control = super::CollabAccessControlImpl::new(access_control.clone());
+
+    // User is not yet in the group -> denied.
+    assert!(collab_access_control
+      .enforce_action(&workspace_id, &uid, &oid, Action::Read)
+      .await
+      .is_err());
+
+    // Add the user to the group -> inherits the group's access (read + write).
+    access_control.add_group_membership(uid, &group).await.unwrap();
+    collab_access_control
+      .enforce_action(&workspace_id, &uid, &oid, Action::Read)
+      .await
+      .expect("group member should read");
+    collab_access_control
+      .enforce_action(&workspace_id, &uid, &oid, Action::Write)
+      .await
+      .expect("group member should write");
+
+    // Removing the user from the group revokes the inherited access.
+    access_control
+      .remove_group_membership(uid, &group)
+      .await
+      .unwrap();
+    assert!(collab_access_control
+      .enforce_action(&workspace_id, &uid, &oid, Action::Read)
+      .await
+      .is_err());
+  }
 }

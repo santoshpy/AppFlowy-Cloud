@@ -394,6 +394,38 @@ impl AFEnforcerV2 {
     result
   }
 
+  /// Adds a user -> group membership to the `g2` grouping so that policies whose
+  /// subject is the group also apply to the user. Idempotent (casbin ignores
+  /// duplicate grouping rules). Group membership changes are infrequent, so this
+  /// is applied directly under the write lock rather than via the policy queue;
+  /// the resulting policy-change event invalidates the enforce cache.
+  pub async fn add_group_membership(
+    &self,
+    uid: i64,
+    group_subject: &str,
+  ) -> Result<(), AppError> {
+    let mut enforcer = self.enforcer.write().await;
+    enforcer
+      .add_named_grouping_policy("g2", vec![uid.to_string(), group_subject.to_string()])
+      .await
+      .map_err(|e| AppError::Internal(anyhow!("fail to add group membership: {e:?}")))?;
+    Ok(())
+  }
+
+  /// Removes a user -> group membership from the `g2` grouping.
+  pub async fn remove_group_membership(
+    &self,
+    uid: i64,
+    group_subject: &str,
+  ) -> Result<(), AppError> {
+    let mut enforcer = self.enforcer.write().await;
+    enforcer
+      .remove_named_grouping_policy("g2", vec![uid.to_string(), group_subject.to_string()])
+      .await
+      .map_err(|e| AppError::Internal(anyhow!("fail to remove group membership: {e:?}")))?;
+    Ok(())
+  }
+
   /// Enforces an access control policy with eventual consistency.
   /// - `Eventual`: Returns immediately with potentially stale data (fastest)
   #[instrument(level = "debug", skip_all)]

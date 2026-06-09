@@ -92,6 +92,31 @@ impl AccessControl {
     Ok(())
   }
 
+  /// Adds a user -> group membership so that policies granted to the group also
+  /// apply to the user (see the `g2` grouping in the casbin model).
+  pub async fn add_group_membership(
+    &self,
+    uid: i64,
+    group: &SubjectType,
+  ) -> Result<(), AppError> {
+    self
+      .enforcer
+      .add_group_membership(uid, &group.policy_subject())
+      .await
+  }
+
+  /// Removes a user -> group membership.
+  pub async fn remove_group_membership(
+    &self,
+    uid: i64,
+    group: &SubjectType,
+  ) -> Result<(), AppError> {
+    self
+      .enforcer
+      .remove_group_membership(uid, &group.policy_subject())
+      .await
+  }
+
   /// Enforces access control policy with eventual consistency.
   ///
   /// This method provides fast policy checks by evaluating against the current state
@@ -206,13 +231,14 @@ r = sub, obj, act
 p = sub, obj, act
 
 [role_definition]
-g = _, _ # grouping rule
+g = _, _ # act grouping: maps a role/access-level to the actions it permits
+g2 = _, _ # subject grouping: maps a user to the groups they belong to
 
 [policy_effect]
 e = some(where (p.eft == allow))
 
 [matchers]
-m = r.sub == p.sub && p.obj == r.obj && (g(p.act, r.act) || cmpRoleOrLevel(r.act, p.act))
+m = (r.sub == p.sub || g2(r.sub, p.sub)) && p.obj == r.obj && (g(p.act, r.act) || cmpRoleOrLevel(r.act, p.act))
 "###;
 
 pub async fn casbin_model() -> Result<DefaultModel, AppError> {

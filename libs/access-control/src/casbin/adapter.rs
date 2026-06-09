@@ -7,7 +7,10 @@ use casbin::Filter;
 use casbin::Model;
 use casbin::Result;
 
-use database::access_control::{select_object_grant_perm_stream, AFObjectGrantPermRow};
+use database::access_control::{
+  select_group_grant_perm_stream, select_group_membership_stream, select_object_grant_perm_stream,
+  AFGroupGrantPermRow, AFGroupMembershipRow, AFObjectGrantPermRow,
+};
 use database::pg_row::AFWorkspaceMemberPermRow;
 use database::workspace::select_workspace_member_perm_stream;
 
@@ -96,6 +99,24 @@ pub async fn load_workspace_policies(
   Ok(policies)
 }
 
+fn access_level_act(level: i32) -> Option<String> {
+  let level = match level {
+    10 => AFAccessLevel::ReadOnly,
+    20 => AFAccessLevel::ReadAndComment,
+    30 => AFAccessLevel::ReadAndWrite,
+    50 => AFAccessLevel::FullAccess,
+    // Unknown/out-of-range levels are skipped rather than mis-granting.
+    _ => return None,
+  };
+  Some(level.to_enforce_act())
+}
+
+/// The casbin subject string for a group, namespaced with `g:` to avoid
+/// collision with numeric user ids. Must match the biz layer's group subject.
+pub fn group_subject(group_id: &uuid::Uuid) -> String {
+  format!("g:{}", group_id)
+}
+
 /// Loads object-level (per-collab) user grants as casbin policies.
 ///
 /// Each row becomes a policy `[uid, "collab::<object_id>", "l:<level>"]`. These
@@ -107,23 +128,58 @@ pub async fn load_object_grant_policies(
   let mut policies: Vec<Vec<String>> = Vec::new();
 
   while let Some(Ok(grant)) = stream.next().await {
-    let level = match grant.access_level {
-      10 => AFAccessLevel::ReadOnly,
-      20 => AFAccessLevel::ReadAndComment,
-      30 => AFAccessLevel::ReadAndWrite,
-      50 => AFAccessLevel::FullAccess,
-      // Unknown/out-of-range levels are skipped rather than mis-granting.
-      _ => continue,
+    let Some(act) = access_level_act(grant.access_level) else {
+      continue;
     };
     let object_type = ObjectType::Collab(grant.object_id.to_string());
     policies.push(vec![
       grant.uid.to_string(),
       object_type.policy_object(),
-      level.to_enforce_act(),
+      act,
     ]);
   }
 
   Ok(policies)
+}
+
+/// Loads group object-level grants as casbin policies with a group subject:
+/// `["g:<group_id>", "collab::<object_id>", "l:<level>"]`. Members resolve to
+/// these via the `g2` grouping.
+pub async fn load_group_grant_policies(
+  mut stream: BoxStream<'_, sqlx::Result<AFGroupGrantPermRow>>,
+) -> Result<Vec<Vec<String>>> {
+  let mut policies: Vec<Vec<String>> = Vec::new();
+
+  while let Some(Ok(grant)) = stream.next().await {
+    let Some(act) = access_level_act(grant.access_level) else {
+      continue;
+    };
+    let object_type = ObjectType::Collab(grant.object_id.to_string());
+    policies.push(vec![
+      group_subject(&grant.group_id),
+      object_type.policy_object(),
+      act,
+    ]);
+  }
+
+  Ok(policies)
+}
+
+/// Loads user -> group memberships as casbin `g2` grouping rules
+/// `[uid, "g:<group_id>"]`.
+pub async fn load_group_membership_rules(
+  mut stream: BoxStream<'_, sqlx::Result<AFGroupMembershipRow>>,
+) -> Result<Vec<Vec<String>>> {
+  let mut rules: Vec<Vec<String>> = Vec::new();
+
+  while let Some(Ok(membership)) = stream.next().await {
+    rules.push(vec![
+      membership.uid.to_string(),
+      group_subject(&membership.group_id),
+    ]);
+  }
+
+  Ok(rules)
 }
 
 #[async_trait]
@@ -140,6 +196,16 @@ impl Adapter for PgAdapter {
     let object_grant_stream = select_object_grant_perm_stream(&self.pg_pool);
     let object_grant_policies = load_object_grant_policies(object_grant_stream).await?;
     model.add_policies("p", "p", object_grant_policies);
+
+    // Object-level group grants (per-collab access levels for a group subject).
+    let group_grant_stream = select_group_grant_perm_stream(&self.pg_pool);
+    let group_grant_policies = load_group_grant_policies(group_grant_stream).await?;
+    model.add_policies("p", "p", group_grant_policies);
+
+    // User -> group memberships as the `g2` grouping.
+    let group_membership_stream = select_group_membership_stream(&self.pg_pool);
+    let group_membership_rules = load_group_membership_rules(group_membership_stream).await?;
+    model.add_policies("g", "g2", group_membership_rules);
 
     self
       .access_control_metrics

@@ -1,4 +1,5 @@
 use access_control::collab::{CollabAccessControl, RealtimeAccessControl};
+use access_control::group::GroupAccessControl;
 use access_control::workspace::WorkspaceAccessControl;
 use actix::Addr;
 use anyhow::anyhow;
@@ -51,6 +52,7 @@ pub struct AppState {
   pub collab_access_control: Arc<dyn CollabAccessControl>,
   pub workspace_access_control: Arc<dyn WorkspaceAccessControl>,
   pub realtime_access_control: Arc<dyn RealtimeAccessControl>,
+  pub group_access_control: Arc<dyn GroupAccessControl>,
   pub bucket_storage: Arc<S3BucketStorage>,
   pub published_collab_store: Arc<dyn PublishedCollabStore>,
   pub bucket_client: AwsS3BucketClientImpl,

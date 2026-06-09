@@ -4,8 +4,10 @@ use std::time::Duration;
 
 use access_control::casbin::access::AccessControl;
 use access_control::casbin::collab::{CollabAccessControlImpl, RealtimeCollabAccessControlImpl};
+use access_control::casbin::group::GroupAccessControlImpl;
 use access_control::casbin::workspace::WorkspaceAccessControlImpl;
 use access_control::collab::{CollabAccessControl, RealtimeAccessControl};
+use access_control::group::GroupAccessControl;
 use access_control::noops::collab::{
   CollabAccessControlImpl as NoOpsCollabAccessControlImpl,
   RealtimeCollabAccessControlImpl as NoOpsRealtimeCollabAccessControlImpl,
@@ -59,7 +61,7 @@ use crate::api::file_storage::file_storage_scope;
 use crate::api::guest::sharing_scope;
 use crate::api::invite_code::invite_code_scope;
 use crate::api::metrics::metrics_scope;
-use crate::api::rbac::rbac_scope;
+use crate::api::rbac::{group_scope, rbac_scope};
 use crate::api::search::search_scope;
 use crate::api::server_info::server_info_scope;
 use crate::api::template::template_scope;
@@ -168,6 +170,7 @@ pub async fn run_actix_server(
       .service(access_request_scope())
       .service(sharing_scope())
       .service(rbac_scope())
+      .service(group_scope())
       .route("/health", web::get().to(health_check))
       .app_data(Data::new(state.metrics.registry.clone()))
       .app_data(Data::new(state.metrics.request_metrics.clone()))
@@ -285,6 +288,11 @@ pub async fn init_state(config: &Config) -> Result<AppState, Error> {
     } else {
       Arc::new(NoOpsWorkspaceAccessControlImpl::new())
     };
+  // Group membership/grants always go through the real enforcer (the durable
+  // rows are written regardless); enforcement is only consulted when collab
+  // access control is enabled.
+  let group_access_control: Arc<dyn GroupAccessControl> =
+    Arc::new(GroupAccessControlImpl::new(access_control.clone()));
 
   // thread pool
   let thread_pool = Arc::new(
@@ -384,6 +392,7 @@ pub async fn init_state(config: &Config) -> Result<AppState, Error> {
     collab_storage: collab_access_control_storage,
     collab_access_control,
     workspace_access_control,
+    group_access_control,
     realtime_access_control,
     bucket_storage,
     published_collab_store,

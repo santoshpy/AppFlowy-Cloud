@@ -1,6 +1,7 @@
 pub mod access;
 mod adapter;
 pub mod collab;
+pub mod group;
 
 #[cfg(test)]
 mod enforcer;
