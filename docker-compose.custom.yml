@@ -1,0 +1,34 @@
+# Custom-image overlay for the self-hosted fork.
+#
+# Builds appflowy_cloud (this repo) and appflowy_web (sibling ../AppFlowy-Web
+# checkout) from source instead of pulling the published images, so the team's
+# RBAC + branding changes are what actually runs.
+#
+# Usage (run together with the base compose):
+#   docker compose -f docker-compose.yml -f docker-compose.custom.yml up -d --build
+#
+# To rebuild just one service after changes:
+#   docker compose -f docker-compose.yml -f docker-compose.custom.yml up -d --build appflowy_cloud
+#   docker compose -f docker-compose.yml -f docker-compose.custom.yml up -d --build appflowy_web
+#
+# Prerequisites:
+#   - ../AppFlowy-Web checked out next to this repo
+#   - .env generated from deploy.env (FQDN=localhost by default)
+#
+# The appflowy_cloud build defaults to a release build. For faster local
+# iteration, pass a debug build arg:
+#   docker compose -f docker-compose.yml -f docker-compose.custom.yml build \
+#     --build-arg PROFILE=debug appflowy_cloud
+
+services:
+  appflowy_cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: appflowyinc/appflowy_cloud:custom
+
+  appflowy_web:
+    build:
+      context: ../AppFlowy-Web
+      dockerfile: docker/Dockerfile
+    image: appflowyinc/appflowy_web:custom

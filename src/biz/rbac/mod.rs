@@ -73,6 +73,26 @@ async fn ensure_can_manage(
   Err(AppError::NotEnoughPermissions)
 }
 
+/// Strict guard: a permission (object grant, group membership, role assignment)
+/// may only ever be given to a user who is already a member of the workspace.
+/// This prevents permission leaks to anyone outside the workspace.
+async fn ensure_user_in_workspace(
+  pg_pool: &PgPool,
+  workspace_id: &Uuid,
+  uid: i64,
+) -> Result<(), AppError> {
+  if select_workspace_member_role_id(pg_pool, workspace_id, uid)
+    .await?
+    .is_some()
+  {
+    Ok(())
+  } else {
+    Err(AppError::InvalidRequest(
+      "the target user is not a member of this workspace".to_string(),
+    ))
+  }
+}
+
 fn access_level_from_i32(value: i32) -> AFAccessLevel {
   match value {
     10 => AFAccessLevel::ReadOnly,
@@ -107,6 +127,7 @@ pub async fn grant_object_access(
   .await?;
 
   let grantee_uid = select_uid_from_email(pg_pool, &params.email).await?;
+  ensure_user_in_workspace(pg_pool, workspace_id, grantee_uid).await?;
   let level = params.access_level;
 
   upsert_object_grant(
@@ -287,6 +308,7 @@ pub async fn add_group_member(
   ensure_group_in_workspace(pg_pool, group_id, workspace_id).await?;
 
   let uid = select_uid_from_email(pg_pool, email).await?;
+  ensure_user_in_workspace(pg_pool, workspace_id, uid).await?;
   insert_group_member(pg_pool, group_id, uid).await?;
   group_access_control.add_member(uid, group_id).await?;
   Ok(())
@@ -486,6 +508,7 @@ pub async fn assign_role(
   ensure_can_manage(pg_pool, workspace_access_control, granter_uid, workspace_id, "role.manage").await?;
   ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
   let uid = select_uid_from_email(pg_pool, email).await?;
+  ensure_user_in_workspace(pg_pool, workspace_id, uid).await?;
   assign_custom_role(pg_pool, workspace_id, uid, role_id).await?;
   Ok(())
 }
