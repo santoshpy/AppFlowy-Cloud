@@ -360,22 +360,29 @@ pub async fn select_custom_role_workspace<'a, E: Executor<'a, Database = Postgre
 
 /// Replaces a role's capability set (af_role_permissions rows mapped from
 /// capability strings to permission ids).
-pub async fn set_role_capabilities<'a, E: Executor<'a, Database = Postgres>>(
-  executor: E,
+///
+/// Delete and insert run as separate statements in a transaction: a single
+/// data-modifying CTE would evaluate both against the same snapshot, so the
+/// insert would conflict with the not-yet-deleted rows.
+pub async fn set_role_capabilities(
+  pg_pool: &PgPool,
   role_id: i32,
   capabilities: &[String],
 ) -> Result<(), AppError> {
-  // A single statement so it can run on a plain &PgPool executor: delete the
-  // existing rows and re-insert from the capability list in one CTE.
+  let mut txn = pg_pool.begin().await?;
+  sqlx::query("DELETE FROM af_role_permissions WHERE role_id = $1")
+    .bind(role_id)
+    .execute(&mut *txn)
+    .await?;
   sqlx::query(
-    "WITH cleared AS (DELETE FROM af_role_permissions WHERE role_id = $1) \
-     INSERT INTO af_role_permissions (role_id, permission_id) \
+    "INSERT INTO af_role_permissions (role_id, permission_id) \
      SELECT $1, id FROM af_permissions WHERE capability = ANY($2)",
   )
   .bind(role_id)
   .bind(capabilities)
-  .execute(executor)
+  .execute(&mut *txn)
   .await?;
+  txn.commit().await?;
   Ok(())
 }
 
@@ -411,19 +418,19 @@ pub async fn update_custom_role_meta<'a, E: Executor<'a, Database = Postgres>>(
   Ok(())
 }
 
-pub async fn delete_custom_role<'a, E: Executor<'a, Database = Postgres>>(
-  executor: E,
-  role_id: i32,
-) -> Result<(), AppError> {
-  // af_user_custom_role cascades on the role delete; af_role_permissions is
-  // cleared in the same statement via a CTE.
-  sqlx::query(
-    "WITH cleared AS (DELETE FROM af_role_permissions WHERE role_id = $1) \
-     DELETE FROM af_roles WHERE id = $1 AND is_custom",
-  )
-  .bind(role_id)
-  .execute(executor)
-  .await?;
+pub async fn delete_custom_role(pg_pool: &PgPool, role_id: i32) -> Result<(), AppError> {
+  // Clear af_role_permissions first (its FK to af_roles is not deferrable), then
+  // delete the role. af_user_custom_role cascades on the role delete.
+  let mut txn = pg_pool.begin().await?;
+  sqlx::query("DELETE FROM af_role_permissions WHERE role_id = $1")
+    .bind(role_id)
+    .execute(&mut *txn)
+    .await?;
+  sqlx::query("DELETE FROM af_roles WHERE id = $1 AND is_custom")
+    .bind(role_id)
+    .execute(&mut *txn)
+    .await?;
+  txn.commit().await?;
   Ok(())
 }
 
