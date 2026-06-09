@@ -33,12 +33,20 @@ services:
       dockerfile: docker/Dockerfile
     image: appflowyinc/appflowy_web:custom
 
-# NOTE: the super-admin console (admin_frontend, served at /console) uses a single
-# APPFLOWY_BASE_URL for BOTH its server-side calls (which must reach
-# appflowy_cloud over the internal docker network) AND browser-side calls (which
-# the user's browser must be able to reach). With FQDN=localhost these conflict —
-# `localhost`/`appflowy_cloud` mean different things in the container vs the
-# browser — so the console cannot fully work on a localhost self-host. Deploy with
-# a real domain (FQDN=your.domain, reachable from both) to use the console.
-# Workspace RBAC (members/groups/roles) is managed in the app Settings and does
-# not need the console.
+  # Admin console (server-rendered OSS admin_frontend from this repo) instead of
+  # the published commercial Next.js image. The OSS console is fully
+  # server-rendered and makes its backend calls server-side via dedicated
+  # ADMIN_FRONTEND_* URLs, so the browser only ever talks to the console itself —
+  # which makes it work on a localhost self-host (no internal/external base-URL
+  # conflict). Served under /console via nginx -> admin_frontend:3000.
+  admin_frontend:
+    build:
+      context: .
+      dockerfile: admin_frontend/Dockerfile
+    image: appflowyinc/admin_frontend:custom
+    environment:
+      - ADMIN_FRONTEND_GOTRUE_URL=http://gotrue:9999
+      - ADMIN_FRONTEND_APPFLOWY_CLOUD_URL=http://appflowy_cloud:8000
+      - ADMIN_FRONTEND_REDIS_URL=redis://redis:6379
+      - ADMIN_FRONTEND_PATH_PREFIX=/console
+      - ADMIN_FRONTEND_PORT=3000

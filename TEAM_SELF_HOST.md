@@ -27,6 +27,21 @@ leak to non-members. Management actions are gated by capability
 (`ensure_can_manage`: workspace Owner **or** the specific capability via an
 assigned custom role). Listing endpoints require workspace membership.
 
+## Admin console (`/console`) — server / user administration
+
+The published `appflowy_web` stack ships the **commercial** Next.js super-admin
+image, which makes browser-side calls to `APPFLOWY_BASE_URL` and therefore does
+**not** work on a `localhost` self-host (the browser and the container disagree
+on what `localhost`/`appflowy_cloud` mean). The custom overlay instead builds and
+runs the repo's **OSS `admin_frontend`** (Rust/axum, fully server-rendered): the
+browser only ever talks to the console, which calls gotrue/appflowy_cloud
+server-side over the internal docker network. This works on localhost.
+
+- URL: `http://localhost/console` → login `admin@example.com` / `password`.
+- Features: list/create/delete users, invite, change password, SSO, usage.
+- Server-side config is via `ADMIN_FRONTEND_GOTRUE_URL` /
+  `ADMIN_FRONTEND_APPFLOWY_CLOUD_URL` (internal), set in docker-compose.custom.yml.
+
 ## Build & run the custom images
 
 ```bash
