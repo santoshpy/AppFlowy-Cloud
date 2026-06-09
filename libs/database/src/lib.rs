@@ -1,3 +1,4 @@
+pub mod access_control;
 pub mod access_request;
 pub mod chat;
 pub mod collab;
