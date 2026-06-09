@@ -41,10 +41,13 @@ CREATE INDEX IF NOT EXISTS idx_af_object_grant_workspace ON af_object_grant (wor
 -- Best-effort backfill from the legacy per-collab member table. In current
 -- installs af_collab_member is empty (writes were disabled), so this is usually
 -- a no-op; included for correctness on older databases.
+-- Cast oids to text for the join/regex (af_collab.oid and af_collab_member.oid
+-- may be text or uuid depending on schema version) and to uuid for the target
+-- column. This keeps the backfill valid regardless of the underlying oid type.
 INSERT INTO af_object_grant (workspace_id, object_type, object_id, uid, access_level, granted_by)
-SELECT c.workspace_id, 'page', m.oid::uuid, m.uid, p.access_level, m.uid
+SELECT c.workspace_id, 'page', m.oid::text::uuid, m.uid, p.access_level, m.uid
 FROM af_collab_member m
 JOIN af_permissions p ON p.id = m.permission_id
-JOIN (SELECT DISTINCT oid, workspace_id FROM af_collab) c ON c.oid = m.oid
-WHERE m.oid ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+JOIN (SELECT DISTINCT oid::text AS oid, workspace_id FROM af_collab) c ON c.oid = m.oid::text
+WHERE m.oid::text ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 ON CONFLICT DO NOTHING;
