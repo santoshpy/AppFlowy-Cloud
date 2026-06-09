@@ -92,3 +92,57 @@ pub struct GrantGroupAccessParams {
   pub object_id: Uuid,
   pub access_level: AFAccessLevel,
 }
+
+// ===== Custom roles + capabilities (Phase 3) =====
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Capability {
+  pub capability: String,
+  pub name: String,
+  pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Capabilities {
+  pub capabilities: Vec<Capability>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CustomRole {
+  pub id: i32,
+  pub name: String,
+  pub description: Option<String>,
+  pub capabilities: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct CustomRoles {
+  pub roles: Vec<CustomRole>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CreateRoleParams {
+  pub name: String,
+  pub description: Option<String>,
+  pub capabilities: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UpdateRoleParams {
+  pub name: String,
+  pub description: Option<String>,
+  pub capabilities: Vec<String>,
+}
+
+/// Assign or unassign a custom role to a user (by email).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AssignRoleParams {
+  pub email: String,
+  pub role_id: i32,
+}
+
+/// The effective capabilities of the current user in a workspace.
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct MyCapabilities {
+  pub capabilities: Vec<String>,
+}

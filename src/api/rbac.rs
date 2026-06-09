@@ -1,8 +1,9 @@
 use actix_web::web::{self, Data, Json, Path};
 use actix_web::{Result, Scope};
 use shared_entity::dto::rbac_dto::{
-  AddGroupMemberParams, CreateGroupParams, GrantGroupAccessParams, GrantObjectAccessParams,
-  GroupMembers, Groups, ObjectGrants,
+  AddGroupMemberParams, AssignRoleParams, Capabilities, CreateGroupParams, CreateRoleParams,
+  CustomRoles, GrantGroupAccessParams, GrantObjectAccessParams, GroupMembers, Groups,
+  MyCapabilities, ObjectGrants, UpdateRoleParams,
 };
 use shared_entity::response::{AppResponse, JsonAppResponse};
 use uuid::Uuid;
@@ -245,6 +246,162 @@ async fn grant_group_access_handler(
     &workspace_id,
     &group_id,
     payload.into_inner(),
+  )
+  .await?;
+  Ok(AppResponse::Ok().into())
+}
+
+/// Custom roles + capabilities (Phase 3):
+///
+/// - `GET    /api/role/workspace/{workspace_id}/capabilities`     capability catalog
+/// - `GET    /api/role/workspace/{workspace_id}/my-capabilities`  caller's effective caps
+/// - `POST   /api/role/workspace/{workspace_id}/assign`           assign a role to a user
+/// - `POST   /api/role/workspace/{workspace_id}`                  create role
+/// - `GET    /api/role/workspace/{workspace_id}`                  list roles
+/// - `PUT    /api/role/workspace/{workspace_id}/{role_id}`        update role
+/// - `DELETE /api/role/workspace/{workspace_id}/{role_id}`        delete role
+/// - `DELETE /api/role/workspace/{workspace_id}/{role_id}/user/{uid}` unassign a role
+///
+/// Literal resources are registered before the `{role_id}` resource so paths
+/// like `capabilities` are not captured as a role id.
+pub fn role_scope() -> Scope {
+  web::scope("/api/role/workspace/{workspace_id}")
+    .service(web::resource("capabilities").route(web::get().to(list_capabilities_handler)))
+    .service(web::resource("my-capabilities").route(web::get().to(my_capabilities_handler)))
+    .service(web::resource("assign").route(web::post().to(assign_role_handler)))
+    .service(
+      web::resource("")
+        .route(web::post().to(create_role_handler))
+        .route(web::get().to(list_roles_handler)),
+    )
+    .service(
+      web::resource("{role_id}")
+        .route(web::put().to(update_role_handler))
+        .route(web::delete().to(delete_role_handler)),
+    )
+    .service(
+      web::resource("{role_id}/user/{uid}").route(web::delete().to(unassign_role_handler)),
+    )
+}
+
+async fn list_capabilities_handler(
+  _user_uuid: UserUuid,
+  _path: Path<Uuid>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<Capabilities>> {
+  let caps = rbac::list_capabilities(&state.pg_pool).await?;
+  Ok(AppResponse::Ok().with_data(caps).into())
+}
+
+async fn my_capabilities_handler(
+  user_uuid: UserUuid,
+  path: Path<Uuid>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<MyCapabilities>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let workspace_id = path.into_inner();
+  let caps = rbac::my_capabilities(&state.pg_pool, uid, &workspace_id).await?;
+  Ok(AppResponse::Ok().with_data(caps).into())
+}
+
+async fn create_role_handler(
+  user_uuid: UserUuid,
+  path: Path<Uuid>,
+  payload: Json<CreateRoleParams>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<i32>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let workspace_id = path.into_inner();
+  let id = rbac::create_role(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    uid,
+    &workspace_id,
+    payload.into_inner(),
+  )
+  .await?;
+  Ok(AppResponse::Ok().with_data(id).into())
+}
+
+async fn list_roles_handler(
+  user_uuid: UserUuid,
+  path: Path<Uuid>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<CustomRoles>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let workspace_id = path.into_inner();
+  let roles = rbac::list_roles(&state.pg_pool, &state.workspace_access_control, uid, &workspace_id)
+    .await?;
+  Ok(AppResponse::Ok().with_data(roles).into())
+}
+
+async fn update_role_handler(
+  user_uuid: UserUuid,
+  path: Path<(Uuid, i32)>,
+  payload: Json<UpdateRoleParams>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<()>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let (workspace_id, role_id) = path.into_inner();
+  rbac::update_role(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    uid,
+    &workspace_id,
+    role_id,
+    payload.into_inner(),
+  )
+  .await?;
+  Ok(AppResponse::Ok().into())
+}
+
+async fn delete_role_handler(
+  user_uuid: UserUuid,
+  path: Path<(Uuid, i32)>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<()>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let (workspace_id, role_id) = path.into_inner();
+  rbac::delete_role(&state.pg_pool, &state.workspace_access_control, uid, &workspace_id, role_id)
+    .await?;
+  Ok(AppResponse::Ok().into())
+}
+
+async fn assign_role_handler(
+  user_uuid: UserUuid,
+  path: Path<Uuid>,
+  payload: Json<AssignRoleParams>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<()>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let workspace_id = path.into_inner();
+  let params = payload.into_inner();
+  rbac::assign_role(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    uid,
+    &workspace_id,
+    &params.email,
+    params.role_id,
+  )
+  .await?;
+  Ok(AppResponse::Ok().into())
+}
+
+async fn unassign_role_handler(
+  user_uuid: UserUuid,
+  path: Path<(Uuid, i32, i64)>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<()>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let (workspace_id, role_id, member_uid) = path.into_inner();
+  rbac::unassign_role(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    uid,
+    &workspace_id,
+    member_uid,
+    role_id,
   )
   .await?;
   Ok(AppResponse::Ok().into())

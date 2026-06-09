@@ -61,7 +61,7 @@ use crate::api::file_storage::file_storage_scope;
 use crate::api::guest::sharing_scope;
 use crate::api::invite_code::invite_code_scope;
 use crate::api::metrics::metrics_scope;
-use crate::api::rbac::{group_scope, rbac_scope};
+use crate::api::rbac::{group_scope, rbac_scope, role_scope};
 use crate::api::search::search_scope;
 use crate::api::server_info::server_info_scope;
 use crate::api::template::template_scope;
@@ -171,6 +171,7 @@ pub async fn run_actix_server(
       .service(sharing_scope())
       .service(rbac_scope())
       .service(group_scope())
+      .service(role_scope())
       .route("/health", web::get().to(health_check))
       .app_data(Data::new(state.metrics.registry.clone()))
       .app_data(Data::new(state.metrics.request_metrics.clone()))

@@ -280,3 +280,219 @@ pub fn select_group_grant_perm_stream(
   )
   .fetch(pg_pool)
 }
+
+// =====================================================================
+// Custom roles + capabilities (Phase 3)
+// =====================================================================
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct AFCapabilityRow {
+  pub capability: String,
+  pub name: String,
+  pub description: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct AFCustomRoleRow {
+  pub id: i32,
+  pub name: String,
+  pub description: Option<String>,
+}
+
+/// The catalog of named capabilities (af_permissions rows with a capability).
+pub async fn select_capabilities<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+) -> Result<Vec<AFCapabilityRow>, AppError> {
+  let rows = sqlx::query_as::<_, AFCapabilityRow>(
+    "SELECT capability, name, description FROM af_permissions \
+     WHERE capability IS NOT NULL ORDER BY capability",
+  )
+  .fetch_all(executor)
+  .await?;
+  Ok(rows)
+}
+
+pub async fn insert_custom_role<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  name: &str,
+  description: Option<&str>,
+) -> Result<i32, AppError> {
+  let id: i32 = sqlx::query_scalar(
+    "INSERT INTO af_roles (name, workspace_id, is_custom, description) \
+     VALUES ($1, $2, true, $3) RETURNING id",
+  )
+  .bind(name)
+  .bind(workspace_id)
+  .bind(description)
+  .fetch_one(executor)
+  .await?;
+  Ok(id)
+}
+
+pub async fn select_custom_roles<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+) -> Result<Vec<AFCustomRoleRow>, AppError> {
+  let rows = sqlx::query_as::<_, AFCustomRoleRow>(
+    "SELECT id, name, description FROM af_roles \
+     WHERE workspace_id = $1 AND is_custom ORDER BY name",
+  )
+  .bind(workspace_id)
+  .fetch_all(executor)
+  .await?;
+  Ok(rows)
+}
+
+/// The workspace a custom role belongs to, or None if it is not a custom role.
+pub async fn select_custom_role_workspace<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  role_id: i32,
+) -> Result<Option<Uuid>, AppError> {
+  let ws: Option<Uuid> = sqlx::query_scalar(
+    "SELECT workspace_id FROM af_roles WHERE id = $1 AND is_custom",
+  )
+  .bind(role_id)
+  .fetch_optional(executor)
+  .await?;
+  Ok(ws)
+}
+
+/// Replaces a role's capability set (af_role_permissions rows mapped from
+/// capability strings to permission ids).
+pub async fn set_role_capabilities<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  role_id: i32,
+  capabilities: &[String],
+) -> Result<(), AppError> {
+  // A single statement so it can run on a plain &PgPool executor: delete the
+  // existing rows and re-insert from the capability list in one CTE.
+  sqlx::query(
+    "WITH cleared AS (DELETE FROM af_role_permissions WHERE role_id = $1) \
+     INSERT INTO af_role_permissions (role_id, permission_id) \
+     SELECT $1, id FROM af_permissions WHERE capability = ANY($2)",
+  )
+  .bind(role_id)
+  .bind(capabilities)
+  .execute(executor)
+  .await?;
+  Ok(())
+}
+
+pub async fn select_role_capabilities<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  role_id: i32,
+) -> Result<Vec<String>, AppError> {
+  let caps: Vec<String> = sqlx::query_scalar(
+    "SELECT p.capability FROM af_role_permissions rp \
+     JOIN af_permissions p ON p.id = rp.permission_id \
+     WHERE rp.role_id = $1 AND p.capability IS NOT NULL",
+  )
+  .bind(role_id)
+  .fetch_all(executor)
+  .await?;
+  Ok(caps)
+}
+
+pub async fn update_custom_role_meta<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  role_id: i32,
+  name: &str,
+  description: Option<&str>,
+) -> Result<(), AppError> {
+  sqlx::query(
+    "UPDATE af_roles SET name = $2, description = $3 WHERE id = $1 AND is_custom",
+  )
+  .bind(role_id)
+  .bind(name)
+  .bind(description)
+  .execute(executor)
+  .await?;
+  Ok(())
+}
+
+pub async fn delete_custom_role<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  role_id: i32,
+) -> Result<(), AppError> {
+  // af_user_custom_role cascades on the role delete; af_role_permissions is
+  // cleared in the same statement via a CTE.
+  sqlx::query(
+    "WITH cleared AS (DELETE FROM af_role_permissions WHERE role_id = $1) \
+     DELETE FROM af_roles WHERE id = $1 AND is_custom",
+  )
+  .bind(role_id)
+  .execute(executor)
+  .await?;
+  Ok(())
+}
+
+pub async fn assign_custom_role<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  uid: i64,
+  role_id: i32,
+) -> Result<(), AppError> {
+  sqlx::query(
+    "INSERT INTO af_user_custom_role (workspace_id, uid, role_id) \
+     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+  )
+  .bind(workspace_id)
+  .bind(uid)
+  .bind(role_id)
+  .execute(executor)
+  .await?;
+  Ok(())
+}
+
+pub async fn unassign_custom_role<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  uid: i64,
+  role_id: i32,
+) -> Result<(), AppError> {
+  sqlx::query(
+    "DELETE FROM af_user_custom_role WHERE workspace_id = $1 AND uid = $2 AND role_id = $3",
+  )
+  .bind(workspace_id)
+  .bind(uid)
+  .bind(role_id)
+  .execute(executor)
+  .await?;
+  Ok(())
+}
+
+/// Capabilities a user gains from custom roles assigned to them in a workspace.
+pub async fn select_user_custom_capabilities<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  uid: i64,
+) -> Result<Vec<String>, AppError> {
+  let caps: Vec<String> = sqlx::query_scalar(
+    "SELECT DISTINCT p.capability FROM af_user_custom_role ucr \
+     JOIN af_role_permissions rp ON rp.role_id = ucr.role_id \
+     JOIN af_permissions p ON p.id = rp.permission_id \
+     WHERE ucr.workspace_id = $1 AND ucr.uid = $2 AND p.capability IS NOT NULL",
+  )
+  .bind(workspace_id)
+  .bind(uid)
+  .fetch_all(executor)
+  .await?;
+  Ok(caps)
+}
+
+/// The user's base workspace role id (1=Owner, 2=Member, 3=Guest), if a member.
+pub async fn select_workspace_member_role_id<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  uid: i64,
+) -> Result<Option<i32>, AppError> {
+  let role_id: Option<i32> = sqlx::query_scalar(
+    "SELECT role_id FROM af_workspace_member WHERE workspace_id = $1 AND uid = $2",
+  )
+  .bind(workspace_id)
+  .bind(uid)
+  .fetch_optional(executor)
+  .await?;
+  Ok(role_id)
+}
