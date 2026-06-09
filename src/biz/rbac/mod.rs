@@ -10,9 +10,9 @@ use database::access_control::{
   assign_custom_role, delete_custom_role, delete_group, delete_group_member, delete_object_grant,
   insert_custom_role, insert_group, insert_group_member, select_capabilities, select_custom_role_workspace,
   select_custom_roles, select_group_members, select_group_workspace, select_groups,
-  select_object_grants, select_role_capabilities, select_user_custom_capabilities,
-  select_workspace_member_role_id, set_role_capabilities, unassign_custom_role,
-  update_custom_role_meta, upsert_group_object_grant, upsert_object_grant,
+  select_object_grants, select_role_capabilities, select_role_members,
+  select_user_custom_capabilities, select_workspace_member_role_id, set_role_capabilities,
+  unassign_custom_role, update_custom_role_meta, upsert_group_object_grant, upsert_object_grant,
 };
 use database::user::select_uid_from_email;
 use database_entity::dto::{AFAccessLevel, AFRole};
@@ -495,6 +495,30 @@ pub async fn delete_role(
   ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
   delete_custom_role(pg_pool, role_id).await?;
   Ok(())
+}
+
+/// Lists the workspace members assigned a given custom role.
+pub async fn list_role_members(
+  pg_pool: &PgPool,
+  workspace_access_control: &Arc<dyn WorkspaceAccessControl>,
+  requester_uid: i64,
+  workspace_id: &Uuid,
+  role_id: i32,
+) -> Result<GroupMembers, AppError> {
+  workspace_access_control
+    .enforce_role_weak(&requester_uid, workspace_id, AFRole::Member)
+    .await?;
+  ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
+  let rows = select_role_members(pg_pool, workspace_id, role_id).await?;
+  let members = rows
+    .into_iter()
+    .map(|r| GroupMember {
+      uid: r.uid,
+      email: r.email,
+      name: r.name,
+    })
+    .collect();
+  Ok(GroupMembers { members })
 }
 
 pub async fn assign_role(

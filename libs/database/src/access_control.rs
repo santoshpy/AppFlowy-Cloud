@@ -469,6 +469,24 @@ pub async fn unassign_custom_role<'a, E: Executor<'a, Database = Postgres>>(
   Ok(())
 }
 
+/// Lists the users assigned a given custom role in a workspace.
+pub async fn select_role_members<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  role_id: i32,
+) -> Result<Vec<AFGroupMemberRow>, AppError> {
+  let rows = sqlx::query_as::<_, AFGroupMemberRow>(
+    "SELECT u.uid, u.email, u.name FROM af_user_custom_role ucr \
+     JOIN af_user u ON u.uid = ucr.uid \
+     WHERE ucr.workspace_id = $1 AND ucr.role_id = $2 ORDER BY u.email",
+  )
+  .bind(workspace_id)
+  .bind(role_id)
+  .fetch_all(executor)
+  .await?;
+  Ok(rows)
+}
+
 /// Capabilities a user gains from custom roles assigned to them in a workspace.
 pub async fn select_user_custom_capabilities<'a, E: Executor<'a, Database = Postgres>>(
   executor: E,

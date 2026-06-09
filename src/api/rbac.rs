@@ -280,8 +280,29 @@ pub fn role_scope() -> Scope {
         .route(web::delete().to(delete_role_handler)),
     )
     .service(
+      web::resource("{role_id}/member").route(web::get().to(list_role_members_handler)),
+    )
+    .service(
       web::resource("{role_id}/user/{uid}").route(web::delete().to(unassign_role_handler)),
     )
+}
+
+async fn list_role_members_handler(
+  user_uuid: UserUuid,
+  path: Path<(Uuid, i32)>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<GroupMembers>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let (workspace_id, role_id) = path.into_inner();
+  let members = rbac::list_role_members(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    uid,
+    &workspace_id,
+    role_id,
+  )
+  .await?;
+  Ok(AppResponse::Ok().with_data(members).into())
 }
 
 async fn list_capabilities_handler(
