@@ -160,7 +160,7 @@ services:
       - GUEST_INVITES_REQUIRE_ADMIN_APPROVAL=${GUEST_INVITES_REQUIRE_ADMIN_APPROVAL:-false}
     image: appflowyinc/appflowy_cloud:${APPFLOWY_CLOUD_VERSION:-latest}
     healthcheck:
-      test: "curl --fail http://127.0.0.1:8000/api/health || exit 1"
+      test: "curl --fail http://127.0.0.1:8000/health || exit 1"
       interval: 5s
       timeout: 5s
       retries: 12
