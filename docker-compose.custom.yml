@@ -32,3 +32,13 @@ services:
       context: ../AppFlowy-Web
       dockerfile: docker/Dockerfile
     image: appflowyinc/appflowy_web:custom
+
+# NOTE: the super-admin console (admin_frontend, served at /console) uses a single
+# APPFLOWY_BASE_URL for BOTH its server-side calls (which must reach
+# appflowy_cloud over the internal docker network) AND browser-side calls (which
+# the user's browser must be able to reach). With FQDN=localhost these conflict —
+# `localhost`/`appflowy_cloud` mean different things in the container vs the
+# browser — so the console cannot fully work on a localhost self-host. Deploy with
+# a real domain (FQDN=your.domain, reachable from both) to use the console.
+# Workspace RBAC (members/groups/roles) is managed in the app Settings and does
+# not need the console.
