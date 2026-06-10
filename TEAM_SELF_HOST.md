@@ -17,6 +17,28 @@ images from this repo plus the sibling `../AppFlowy-Web` checkout.
 - **Config-driven branding** — `APPFLOWY_BRAND_*` env vars (web), defaulting to
   AppFlowy.
 
+## Web ↔ cloud API compatibility (why the compat routes exist)
+
+AppFlowy ships its `:latest` Docker images from a coordinated web+cloud pairing,
+but the two repos' `main` branches are **not** always API-compatible: cloud
+`main` has restructured some endpoints ahead of web `main`. Building **both**
+forks from `main` therefore breaks core app features (folder/page loading) with
+404s, even though the RBAC code is correct.
+
+To keep a from-source build runnable, this fork adds **additive backward-compat
+routes** in the cloud that delegate to the current handlers (identical
+responses), so AppFlowy Web `main` works unchanged:
+
+| Web (main) calls | Cloud `main` serves | Compat route added |
+|---|---|---|
+| `GET /api/workspace/{id}/view/{view_id}?depth=N` | `/{id}/folder?root_view_id=…` | `get_workspace_view_compat_handler` (`src/api/workspace.rs`) |
+| `GET /api/server-info` | `/api/server` | `server_info_compat_scope` (`src/api/server_info.rs`) |
+
+These are pure aliases (no logic forked), so they carry near-zero merge risk on
+upstream sync. If a future upstream merge changes more endpoint names, add the
+alias the same way (symptom: the web shows "No access to this page" and the
+browser console shows a 404 on a `/view` or other renamed path).
+
 ## Strict permission rule (security invariant)
 
 Permissions may only ever be given to **existing members of the workspace**.
