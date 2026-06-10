@@ -2497,6 +2497,7 @@ async fn get_workspace_folder_handler(
 // `/{workspace_id}/folder?root_view_id=...&depth=N`, but AppFlowy Web `main`
 // still calls the old path. This delegates to the exact same folder-structure
 // logic (identical FolderView response) so the web works unchanged.
+// TODO(remove on web-main sync): drop once AppFlowy Web calls /folder + /page-view.
 async fn get_workspace_view_compat_handler(
   user_uuid: UserUuid,
   path: web::Path<(Uuid, Uuid)>,

@@ -232,6 +232,11 @@ pub async fn grant_object_access(
         params.object_id
       )
     })?;
+  tracing::info!(
+    target: "rbac_audit",
+    actor = granter_uid, workspace = %workspace_id, grantee = grantee_uid,
+    object = %params.object_id, level = level as i32, "grant_object_access"
+  );
   Ok(())
 }
 
@@ -266,6 +271,11 @@ pub async fn revoke_object_access(
       )
     })?;
   delete_object_grant(pg_pool, workspace_id, object_id, grantee_uid).await?;
+  tracing::info!(
+    target: "rbac_audit",
+    actor = granter_uid, workspace = %workspace_id, grantee = grantee_uid,
+    object = %object_id, "revoke_object_access"
+  );
   Ok(())
 }
 
@@ -689,6 +699,10 @@ pub async fn assign_role(
   let uid = select_uid_from_email(pg_pool, email).await?;
   ensure_user_in_workspace(pg_pool, workspace_id, uid).await?;
   assign_custom_role(pg_pool, workspace_id, uid, role_id).await?;
+  tracing::info!(
+    target: "rbac_audit",
+    actor = granter_uid, workspace = %workspace_id, member = uid, role = role_id, "assign_role"
+  );
   Ok(())
 }
 
@@ -703,6 +717,10 @@ pub async fn unassign_role(
   ensure_can_manage(pg_pool, workspace_access_control, granter_uid, workspace_id, "role.manage").await?;
   ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
   unassign_custom_role(pg_pool, workspace_id, member_uid, role_id).await?;
+  tracing::info!(
+    target: "rbac_audit",
+    actor = granter_uid, workspace = %workspace_id, member = member_uid, role = role_id, "unassign_role"
+  );
   Ok(())
 }
 

@@ -11,6 +11,7 @@ pub fn server_info_scope() -> Scope {
 
 // Backward-compat alias. Upstream cloud `main` serves server info at `/api/server`,
 // but AppFlowy Web `main` still requests `/api/server-info`. Serve both.
+// TODO(remove on web-main sync): drop once AppFlowy Web is upgraded to call /api/server.
 pub fn server_info_compat_scope() -> Scope {
   web::scope("/api/server-info").service(web::resource("").route(web::get().to(server_info_handler)))
 }
