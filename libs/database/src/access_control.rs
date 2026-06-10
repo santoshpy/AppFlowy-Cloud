@@ -94,16 +94,22 @@ pub async fn upsert_group_object_grant<'a, E: Executor<'a, Database = Postgres>>
   Ok(())
 }
 
-/// Removes a user's grant on an object. Returns the number of rows removed.
+/// Removes a user's grant on an object within a workspace. Scoped by
+/// `workspace_id` so a caller authorized in one workspace cannot revoke a grant
+/// belonging to another. Returns the number of rows removed.
 pub async fn delete_object_grant<'a, E: Executor<'a, Database = Postgres>>(
   executor: E,
+  workspace_id: &Uuid,
   object_id: &Uuid,
   uid: i64,
 ) -> Result<u64, AppError> {
-  let result = sqlx::query("DELETE FROM af_object_grant WHERE object_id = $1 AND uid = $2")
-    .bind(object_id)
-    .bind(uid)
-    .execute(executor)
+  let result = sqlx::query(
+    "DELETE FROM af_object_grant WHERE workspace_id = $1 AND object_id = $2 AND uid = $3",
+  )
+  .bind(workspace_id)
+  .bind(object_id)
+  .bind(uid)
+  .execute(executor)
     .await?;
   Ok(result.rows_affected())
 }

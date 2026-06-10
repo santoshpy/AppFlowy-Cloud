@@ -9,6 +9,7 @@ mod page_view;
 mod person;
 mod publish;
 mod published_data;
+mod rbac;
 mod quick_note;
 mod template;
 mod workspace_crud;

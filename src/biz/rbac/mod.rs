@@ -47,6 +47,49 @@ fn base_role_capabilities(role_id: Option<i32>) -> Vec<&'static str> {
   }
 }
 
+/// All capabilities a user effectively holds in a workspace: their built-in role
+/// capabilities plus any conferred by assigned custom roles.
+async fn effective_capabilities(
+  pg_pool: &PgPool,
+  uid: i64,
+  workspace_id: &Uuid,
+) -> Result<HashSet<String>, AppError> {
+  let role_id = select_workspace_member_role_id(pg_pool, workspace_id, uid).await?;
+  let mut caps: HashSet<String> = base_role_capabilities(role_id)
+    .into_iter()
+    .map(String::from)
+    .collect();
+  caps.extend(select_user_custom_capabilities(pg_pool, workspace_id, uid).await?);
+  Ok(caps)
+}
+
+/// Prevents privilege escalation via custom roles: a non-owner may only place
+/// capabilities into a role that they themselves hold, and may never grant
+/// `role.manage` (which would let a delegate mint owner-equivalent powers).
+/// Workspace Owners may grant any capability.
+async fn ensure_can_grant_capabilities(
+  pg_pool: &PgPool,
+  workspace_access_control: &Arc<dyn WorkspaceAccessControl>,
+  uid: i64,
+  workspace_id: &Uuid,
+  requested: &[String],
+) -> Result<(), AppError> {
+  if workspace_access_control
+    .enforce_role_weak(&uid, workspace_id, AFRole::Owner)
+    .await
+    .is_ok()
+  {
+    return Ok(());
+  }
+  let held = effective_capabilities(pg_pool, uid, workspace_id).await?;
+  for cap in requested {
+    if cap.as_str() == "role.manage" || !held.contains(cap) {
+      return Err(AppError::NotEnoughPermissions);
+    }
+  }
+  Ok(())
+}
+
 /// Returns Ok if the user may exercise the given management capability: workspace
 /// Owners always may; otherwise the user must hold the capability through an
 /// assigned custom role. This is the capability-based delegation gate, replacing
@@ -141,9 +184,17 @@ pub async fn grant_object_access(
   )
   .await?;
 
+  // B2: the durable row is committed; if the live enforcer update fails, surface
+  // the error (the grant becomes effective once a restart reloads it from the DB).
   collab_access_control
     .update_access_level_policy(&grantee_uid, &params.object_id, level)
-    .await?;
+    .await
+    .inspect_err(|e| {
+      tracing::error!(
+        "grant: enforcer update failed after durable write (uid={grantee_uid}, obj={}): {e}",
+        params.object_id
+      )
+    })?;
   Ok(())
 }
 
@@ -166,10 +217,18 @@ pub async fn revoke_object_access(
   )
   .await?;
 
-  delete_object_grant(pg_pool, object_id, grantee_uid).await?;
+  // B2: remove live access FIRST (fail-closed — never leave access live after the
+  // durable grant is gone), then delete the durable row. M1: scope the delete to
+  // this workspace so an object id from another workspace can't be revoked here.
   collab_access_control
     .remove_access_level(&grantee_uid, object_id)
-    .await?;
+    .await
+    .inspect_err(|e| {
+      tracing::error!(
+        "revoke: enforcer remove_access_level failed (uid={grantee_uid}, obj={object_id}): {e}"
+      )
+    })?;
+  delete_object_grant(pg_pool, workspace_id, object_id, grantee_uid).await?;
   Ok(())
 }
 
@@ -440,6 +499,14 @@ pub async fn create_role(
   params: CreateRoleParams,
 ) -> Result<i32, AppError> {
   ensure_can_manage(pg_pool, workspace_access_control, granter_uid, workspace_id, "role.manage").await?;
+  ensure_can_grant_capabilities(
+    pg_pool,
+    workspace_access_control,
+    granter_uid,
+    workspace_id,
+    &params.capabilities,
+  )
+  .await?;
   let role_id =
     insert_custom_role(pg_pool, workspace_id, &params.name, params.description.as_deref()).await?;
   set_role_capabilities(pg_pool, role_id, &params.capabilities).await?;
@@ -478,6 +545,14 @@ pub async fn update_role(
   params: UpdateRoleParams,
 ) -> Result<(), AppError> {
   ensure_can_manage(pg_pool, workspace_access_control, granter_uid, workspace_id, "role.manage").await?;
+  ensure_can_grant_capabilities(
+    pg_pool,
+    workspace_access_control,
+    granter_uid,
+    workspace_id,
+    &params.capabilities,
+  )
+  .await?;
   ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
   update_custom_role_meta(pg_pool, role_id, &params.name, params.description.as_deref()).await?;
   set_role_capabilities(pg_pool, role_id, &params.capabilities).await?;
@@ -558,13 +633,10 @@ pub async fn my_capabilities(
   uid: i64,
   workspace_id: &Uuid,
 ) -> Result<MyCapabilities, AppError> {
-  let role_id = select_workspace_member_role_id(pg_pool, workspace_id, uid).await?;
-  let mut caps: HashSet<String> = base_role_capabilities(role_id)
+  let mut capabilities: Vec<String> = effective_capabilities(pg_pool, uid, workspace_id)
+    .await?
     .into_iter()
-    .map(String::from)
     .collect();
-  caps.extend(select_user_custom_capabilities(pg_pool, workspace_id, uid).await?);
-  let mut capabilities: Vec<String> = caps.into_iter().collect();
   capabilities.sort();
   Ok(MyCapabilities { capabilities })
 }
