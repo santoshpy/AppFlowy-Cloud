@@ -94,6 +94,38 @@ pub async fn upsert_group_object_grant<'a, E: Executor<'a, Database = Postgres>>
   Ok(())
 }
 
+/// The object ids a group currently has grants on (used to clear the live
+/// enforcer's group-subject policies when a group is deleted).
+pub async fn select_group_object_grant_ids<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  group_id: &Uuid,
+) -> Result<Vec<Uuid>, AppError> {
+  let rows: Vec<(Uuid,)> =
+    sqlx::query_as("SELECT object_id FROM af_object_grant WHERE group_id = $1")
+      .bind(group_id)
+      .fetch_all(executor)
+      .await?;
+  Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Removes a group's grant on an object within a workspace (workspace-scoped).
+pub async fn delete_group_object_grant<'a, E: Executor<'a, Database = Postgres>>(
+  executor: E,
+  workspace_id: &Uuid,
+  object_id: &Uuid,
+  group_id: &Uuid,
+) -> Result<u64, AppError> {
+  let result = sqlx::query(
+    "DELETE FROM af_object_grant WHERE workspace_id = $1 AND object_id = $2 AND group_id = $3",
+  )
+  .bind(workspace_id)
+  .bind(object_id)
+  .bind(group_id)
+  .execute(executor)
+  .await?;
+  Ok(result.rows_affected())
+}
+
 /// Removes a user's grant on an object within a workspace. Scoped by
 /// `workspace_id` so a caller authorized in one workspace cannot revoke a grant
 /// belonging to another. Returns the number of rows removed.

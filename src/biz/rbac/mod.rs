@@ -7,8 +7,10 @@ use app_error::AppError;
 use std::collections::HashSet;
 
 use database::access_control::{
-  assign_custom_role, delete_custom_role, delete_group, delete_group_member, delete_object_grant,
-  insert_custom_role, insert_group, insert_group_member, select_capabilities, select_custom_role_workspace,
+  assign_custom_role, delete_custom_role, delete_group, delete_group_member,
+  delete_group_object_grant, delete_object_grant, insert_custom_role, insert_group,
+  insert_group_member, select_capabilities, select_custom_role_workspace,
+  select_group_object_grant_ids,
   select_custom_roles, select_group_members, select_group_workspace, select_groups,
   select_object_grants, select_role_capabilities, select_role_members,
   select_user_custom_capabilities, select_workspace_member_role_id, set_role_capabilities,
@@ -45,6 +47,40 @@ fn base_role_capabilities(role_id: Option<i32>) -> Vec<&'static str> {
     Some(3) => vec!["page.view"],                          // Guest
     _ => vec![],
   }
+}
+
+/// Rejects capability strings not in the catalog, so a role can't be created that
+/// silently grants nothing (the DB `WHERE capability = ANY` would drop unknowns).
+fn validate_capabilities(requested: &[String]) -> Result<(), AppError> {
+  for cap in requested {
+    if !ALL_CAPABILITIES.contains(&cap.as_str()) {
+      return Err(AppError::InvalidRequest(format!("unknown capability: {cap}")));
+    }
+  }
+  Ok(())
+}
+
+/// Rejects an empty or over-long display name.
+fn validate_name(name: &str) -> Result<(), AppError> {
+  let n = name.trim();
+  if n.is_empty() || n.chars().count() > 100 {
+    return Err(AppError::InvalidRequest(
+      "name must be 1-100 characters".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+/// Only page-level object grants are enforced today (the Casbin adapter maps
+/// every grant to a Collab policy); reject workspace/space types rather than
+/// accept a grant the system silently ignores.
+fn ensure_page_grant(object_type: &str) -> Result<(), AppError> {
+  if object_type != "page" {
+    return Err(AppError::InvalidRequest(
+      "only page-level grants are supported".to_string(),
+    ));
+  }
+  Ok(())
 }
 
 /// All capabilities a user effectively holds in a workspace: their built-in role
@@ -169,6 +205,7 @@ pub async fn grant_object_access(
   )
   .await?;
 
+  ensure_page_grant(params.object_type.as_str())?;
   let grantee_uid = select_uid_from_email(pg_pool, &params.email).await?;
   ensure_user_in_workspace(pg_pool, workspace_id, grantee_uid).await?;
   let level = params.access_level;
@@ -294,6 +331,7 @@ pub async fn create_group(
     "group.manage",
   )
   .await?;
+  validate_name(name)?;
   insert_group(pg_pool, workspace_id, name, description, granter_uid).await
 }
 
@@ -340,9 +378,15 @@ pub async fn delete_group_op(
   // Remove the live g2 memberships first so a deleted group grants nothing, then
   // delete the rows (FK cascade removes memberships and grants from the DB).
   let members = select_group_members(pg_pool, group_id).await?;
+  let grant_oids = select_group_object_grant_ids(pg_pool, group_id).await?;
   delete_group(pg_pool, group_id).await?;
   for m in members {
     group_access_control.remove_member(m.uid, group_id).await?;
+  }
+  // The DB grants are FK-cascaded by delete_group, but the live enforcer's
+  // group-subject policies must be cleared too, else they linger until restart.
+  for oid in grant_oids {
+    group_access_control.revoke_group_access(group_id, &oid).await?;
   }
   Ok(())
 }
@@ -440,6 +484,7 @@ pub async fn grant_group_object_access(
   )
   .await?;
   ensure_group_in_workspace(pg_pool, group_id, workspace_id).await?;
+  ensure_page_grant(params.object_type.as_str())?;
 
   let level = params.access_level;
   upsert_group_object_grant(
@@ -455,6 +500,37 @@ pub async fn grant_group_object_access(
   group_access_control
     .grant_group_access(group_id, &params.object_id, level)
     .await?;
+  Ok(())
+}
+
+/// Revokes a group's grant on an object (durable row + live enforcer).
+pub async fn revoke_group_object_access(
+  pg_pool: &PgPool,
+  workspace_access_control: &Arc<dyn WorkspaceAccessControl>,
+  group_access_control: &Arc<dyn GroupAccessControl>,
+  granter_uid: i64,
+  workspace_id: &Uuid,
+  group_id: &Uuid,
+  object_id: &Uuid,
+) -> Result<(), AppError> {
+  ensure_can_manage(
+    pg_pool,
+    workspace_access_control,
+    granter_uid,
+    workspace_id,
+    "object.manage",
+  )
+  .await?;
+  ensure_group_in_workspace(pg_pool, group_id, workspace_id).await?;
+
+  // Fail-closed: remove live access first, then delete the durable row.
+  group_access_control
+    .revoke_group_access(group_id, object_id)
+    .await
+    .inspect_err(|e| {
+      tracing::error!("revoke group grant: enforcer failed (group={group_id}, obj={object_id}): {e}")
+    })?;
+  delete_group_object_grant(pg_pool, workspace_id, object_id, group_id).await?;
   Ok(())
 }
 
@@ -507,6 +583,8 @@ pub async fn create_role(
     &params.capabilities,
   )
   .await?;
+  validate_name(&params.name)?;
+  validate_capabilities(&params.capabilities)?;
   let role_id =
     insert_custom_role(pg_pool, workspace_id, &params.name, params.description.as_deref()).await?;
   set_role_capabilities(pg_pool, role_id, &params.capabilities).await?;
@@ -553,6 +631,8 @@ pub async fn update_role(
     &params.capabilities,
   )
   .await?;
+  validate_name(&params.name)?;
+  validate_capabilities(&params.capabilities)?;
   ensure_custom_role_in_workspace(pg_pool, role_id, workspace_id).await?;
   update_custom_role_meta(pg_pool, role_id, &params.name, params.description.as_deref()).await?;
   set_role_capabilities(pg_pool, role_id, &params.capabilities).await?;

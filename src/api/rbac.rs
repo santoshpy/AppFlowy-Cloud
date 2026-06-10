@@ -117,6 +117,10 @@ pub fn group_scope() -> Scope {
         .route(web::delete().to(remove_group_member_handler)),
     )
     .service(web::resource("{group_id}/grant").route(web::put().to(grant_group_access_handler)))
+    .service(
+      web::resource("{group_id}/grant/{object_id}")
+        .route(web::delete().to(revoke_group_access_handler)),
+    )
 }
 
 async fn create_group_handler(
@@ -246,6 +250,26 @@ async fn grant_group_access_handler(
     &workspace_id,
     &group_id,
     payload.into_inner(),
+  )
+  .await?;
+  Ok(AppResponse::Ok().into())
+}
+
+async fn revoke_group_access_handler(
+  user_uuid: UserUuid,
+  path: Path<(Uuid, Uuid, Uuid)>,
+  state: Data<AppState>,
+) -> Result<JsonAppResponse<()>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let (workspace_id, group_id, object_id) = path.into_inner();
+  rbac::revoke_group_object_access(
+    &state.pg_pool,
+    &state.workspace_access_control,
+    &state.group_access_control,
+    uid,
+    &workspace_id,
+    &group_id,
+    &object_id,
   )
   .await?;
   Ok(AppResponse::Ok().into())
